@@ -9,8 +9,11 @@
 #include <src/STM32_CAN/STM32_CAN.h>
 #include <SwitecX25.h>
 
-// standard X25.168 range 315 degrees at 1/3 degree steps
+//standard X25.168 range 315 degrees at 1/3 degree steps
 #define STEPS (315*3)
+//define the needle ranges TBD: fine tune.
+#define RPM_STEPS (250*3)
+#define VSS_STEPS (250*3)
 
 static CAN_message_t CAN_outMsg;
 static CAN_message_t CAN_inMsg;
@@ -18,7 +21,8 @@ static CAN_message_t CAN_inMsg;
 static uint32_t RPM_timeout=millis();   // for the RPM timeout
 static uint32_t VSS_timeout=millis();   // for the VSS timeout
 
-STM32_CAN Can1 (_CAN1,DEF);
+STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
+
 
 // For motors connected to digital pins
 SwitecX25 VSSGauge(STEPS,PB7,PB6,PB9,PB8);
@@ -30,7 +34,8 @@ uint16_t VSS,RPM;
 
 void setup(void)
 {
-  // run the motors against the stops
+  Serial.begin(115200); // for debugging
+  // run the motors against the stops TBD: this needs to be done when powering off. Not at startup
   VSSGauge.zero();
   RPMGauge.zero();
 
@@ -52,21 +57,25 @@ void setup(void)
   
   VSS = 0;
   RPM = 0;
+  Serial.println("Setup done");
 }
 
 void readCanMessage() {
   switch (CAN_inMsg.id)
   {
     case 0x316: // RPM in e39/e46 etc.
-      // TBD
-      RPMGauge.setPosition(RPM);
+      VSS = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[2]));
+      RPMGauge.setPosition(map(RPM, 0, 220, 0, RPM_STEPS));
+      Serial.print ("E39/46 RPM: ");
+      Serial.println (RPM);
     break;
     case  0x153: // VSS in e39/e46 etc.
       VSS = ((CAN_inMsg.buf[2] << 8) | (CAN_inMsg.buf[1]));
-      // conversion (speeduino doesn't have internal conversion for CAN data, so we do it here)
       VSS = VSS - 252;
       VSS = VSS >> 7; // divide by 128
-      VSSGauge.setPosition(VSS);
+      VSSGauge.setPosition(map(VSS, 0, 220, 0, VSS_STEPS));
+      Serial.print ("E39/46 VSS: ");
+      Serial.println (VSS);
     break;
     case  0x7E8: // OBD2 PID response.
       switch (CAN_inMsg.buf[2])
@@ -75,12 +84,16 @@ void readCanMessage() {
             RPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[4]));
             RPM = RPM >> 2;
             RPM_Request = true;
-            RPMGauge.setPosition(RPM);
+            RPMGauge.setPosition(map(RPM, 0, 220, 0, RPM_STEPS));
+            Serial.print ("OBD2 RPM: ");
+            Serial.println (RPM);
             break;
           case 0x0D: // VSS
             VSS = CAN_inMsg.buf[3];
             VSS_Request = true;
-            VSSGauge.setPosition(VSS);
+            VSSGauge.setPosition(map(VSS, 0, 220, 0, VSS_STEPS));
+            Serial.print ("OBD2 VSS: ");
+            Serial.println (VSS);
           break;
           default:
           // nothing to do here
@@ -95,7 +108,7 @@ void readCanMessage() {
 
 void loop(void)
 {
-  // the motor only moves when you call update
+  // the gauges only moves when update is called
   VSSGauge.update();
 
   if(RPM_Request){
