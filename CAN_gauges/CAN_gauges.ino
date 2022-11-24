@@ -25,8 +25,8 @@ STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
 
 
 // For motors connected to digital pins
-SwitecX25 VSSGauge(STEPS,PB7,PB6,PB9,PB8);
-SwitecX25 RPMGauge(STEPS,PB13,PB12,PB15,PB14);
+SwitecX25 VSSGauge(STEPS,PB6,PB7,PB9,PB8);
+SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
 
 bool RPM_Request=true;
 bool VSS_Request=true;
@@ -36,8 +36,8 @@ void setup(void)
 {
   Serial.begin(115200); // for debugging
   // run the motors against the stops TBD: this needs to be done when powering off. Not at startup
-  VSSGauge.zero();
-  RPMGauge.zero();
+  //VSSGauge.zero();
+  //RPMGauge.zero();
 
   Serial.begin(115200); // debug
 
