@@ -68,13 +68,53 @@ void CalcRPMgaugeSteps()
   }
   else
   {
-    RPMGauge.setPosition(map(RPM, 1000, 9950, 50, STEPS));
+    RPMGauge.setPosition(map(RPM, 1000, 9940, 50, STEPS));
   }
 }
 
 void CalcVSSgaugeSteps()
 {
-  VSSGauge.setPosition(map(VSS, 0, 278, 0, STEPS));
+  // VSS gauge face is even less linear. This looks horrible, but it works.
+  if ( VSS < 40 )
+  {
+    VSSGauge.setPosition(map(VSS, 0, 40, 0, 76));
+  }
+  else if ( VSS < 60 )
+  {
+    VSSGauge.setPosition(map(VSS, 40, 60, 76, 150));
+  }
+  else if ( VSS < 80 )
+  {
+    VSSGauge.setPosition(map(VSS, 60, 80, 150, 221));
+  }
+  else if ( VSS < 100 )
+  {
+    VSSGauge.setPosition(map(VSS, 80, 100, 221, 296));
+  }
+  else if ( VSS < 120 )
+  {
+    VSSGauge.setPosition(map(VSS, 100, 120, 296, 370));
+  }
+  else if ( VSS < 140 )
+  {
+    VSSGauge.setPosition(map(VSS, 120, 140, 370, 443));
+  }
+  else if ( VSS < 160 )
+  {
+    VSSGauge.setPosition(map(VSS, 140, 160, 443, 517));
+  }
+  else if ( VSS < 180 )
+  {
+    VSSGauge.setPosition(map(VSS, 160, 180, 517, 592));
+  }
+  else if ( VSS < 200 )
+  {
+    VSSGauge.setPosition(map(VSS, 180, 200, 592, 670));
+  }
+  else
+  {
+    VSSGauge.setPosition(map(VSS, 200, 273, 670, STEPS));
+  }
 }
 
 void readCanMessage()
@@ -135,14 +175,14 @@ void loop(void)
 	RPM = 0;
 	CalcRPMgaugeSteps();
 	VSS_Request = true;
-    Serial.println ("RPM data timeout!");
+    Serial.println ("RPM timeout");
   }
   if ( (millis()-VSS_timeout) > 500) { // timeout, because no VSS data from CAN bus
     VSS_timeout = millis();
 	VSS = 0;
 	VSS_Request = true;
 	CalcVSSgaugeSteps();
-    Serial.println ("VSS data timeout!");
+    Serial.println ("VSS timeout");
   }
   // the gauges only moves when update is called
   VSSGauge.update();
