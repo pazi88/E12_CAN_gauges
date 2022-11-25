@@ -6,14 +6,11 @@
 //LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 //OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //THE SOFTWARE.
-#include <src/STM32_CAN/STM32_CAN.h>
+#include "STM32_CAN.h"
 #include <SwitecX25.h>
 
 //standard X25.168 range 315 degrees at 1/3 degree steps
 #define STEPS (315*3)
-//define the needle ranges TBD: fine tune.
-#define RPM_STEPS (250*3)
-#define VSS_STEPS (250*3)
 
 static CAN_message_t CAN_outMsg;
 static CAN_message_t CAN_inMsg;
@@ -57,25 +54,48 @@ void setup(void)
   
   VSS = 0;
   RPM = 0;
+  RPMGauge.setPosition(0);
+  VSSGauge.setPosition(0);
   Serial.println("Setup done");
 }
 
-void readCanMessage() {
+void CalcRPMgaugeSteps()
+{
+  // RPM gauge face is not liner. Below 1000 RPM has different scale than above it.
+  if ( RPM < 1000 )
+  {
+    RPMGauge.setPosition(map(RPM, 0, 1000, 0, 50));
+  }
+  else
+  {
+    RPMGauge.setPosition(map(RPM, 1000, 9950, 50, STEPS));
+  }
+}
+
+void CalcVSSgaugeSteps()
+{
+  VSSGauge.setPosition(map(VSS, 0, 278, 0, STEPS));
+}
+
+void readCanMessage()
+{
   switch (CAN_inMsg.id)
   {
     case 0x316: // RPM in e39/e46 etc.
-      VSS = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[2]));
-      RPMGauge.setPosition(map(RPM, 0, 220, 0, RPM_STEPS));
+      RPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[2]));
+      CalcRPMgaugeSteps();
       Serial.print ("E39/46 RPM: ");
       Serial.println (RPM);
+      RPM_timeout = millis();             // zero the timeout
     break;
     case  0x153: // VSS in e39/e46 etc.
       VSS = ((CAN_inMsg.buf[2] << 8) | (CAN_inMsg.buf[1]));
       VSS = VSS - 252;
       VSS = VSS >> 7; // divide by 128
-      VSSGauge.setPosition(map(VSS, 0, 220, 0, VSS_STEPS));
+      CalcVSSgaugeSteps();
       Serial.print ("E39/46 VSS: ");
       Serial.println (VSS);
+      VSS_timeout = millis();             // zero the timeout
     break;
     case  0x7E8: // OBD2 PID response.
       switch (CAN_inMsg.buf[2])
@@ -84,16 +104,18 @@ void readCanMessage() {
             RPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[4]));
             RPM = RPM >> 2;
             RPM_Request = true;
-            RPMGauge.setPosition(map(RPM, 0, 220, 0, RPM_STEPS));
+            CalcRPMgaugeSteps();
             Serial.print ("OBD2 RPM: ");
             Serial.println (RPM);
+            RPM_timeout = millis();             // zero the timeout
             break;
           case 0x0D: // VSS
             VSS = CAN_inMsg.buf[3];
             VSS_Request = true;
-            VSSGauge.setPosition(map(VSS, 0, 220, 0, VSS_STEPS));
+            CalcVSSgaugeSteps();
             Serial.print ("OBD2 VSS: ");
             Serial.println (VSS);
+            VSS_timeout = millis();             // zero the timeout
           break;
           default:
           // nothing to do here
@@ -108,23 +130,37 @@ void readCanMessage() {
 
 void loop(void)
 {
+  if ( (millis()-RPM_timeout) > 500) { // timeout, because no RPM data from CAN bus
+    RPM_timeout = millis();
+	RPM = 0;
+	CalcRPMgaugeSteps();
+	VSS_Request = true;
+    Serial.println ("RPM data timeout!");
+  }
+  if ( (millis()-VSS_timeout) > 500) { // timeout, because no VSS data from CAN bus
+    VSS_timeout = millis();
+	VSS = 0;
+	VSS_Request = true;
+	CalcVSSgaugeSteps();
+    Serial.println ("VSS data timeout!");
+  }
   // the gauges only moves when update is called
   VSSGauge.update();
+  RPMGauge.update();
 
-  if(RPM_Request){
+  if(RPM_Request) {
     CAN_outMsg.buf[2]= 0x0C; // PID number for RPM
     Can1.write(CAN_outMsg);
     RPM_Request = false;
   }
   
-  if(VSS_Request){
+  if(VSS_Request) {
     CAN_outMsg.buf[2]= 0x0D; // PID number for VSS
     Can1.write(CAN_outMsg);
     VSS_Request = false;
   }
 
-  while (Can1.read(CAN_inMsg) ) 
-  {
+  while (Can1.read(CAN_inMsg) ) {
     readCanMessage();
   }
 }
