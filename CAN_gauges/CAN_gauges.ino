@@ -20,12 +20,14 @@
 #define STEPS (315*3)
 
 // For motors connected to digital pins 4,5,6,7
-SwitecX25 motor1(STEPS,PB7,PB6,PB9,PB8);
+SwitecX25 motor1(STEPS,PB6,PB7,PB9,PB8);
+SwitecX25 motor2(STEPS,PB12,PB13,PB15,PB14);
 
 void setup(void)
 {
   // run the motor against the stops
   motor1.zero();
+  motor2.zero();
   // start moving towards the center of the range
   //motor1.setPosition(STEPS/2);
   
@@ -40,11 +42,13 @@ void loop(void)
   static int nextPos = 0;
   // the motor only moves when you call update
   motor1.update();
+  motor2.update();
   
   if (Serial.available()) {
     char c = Serial.read();
     if (c==10 || c==13) {
       motor1.setPosition(nextPos);
+      motor2.setPosition(nextPos);
       nextPos = 0;
     } else if (c>='0' && c<='9') {
       nextPos = 10*nextPos + (c-'0');
