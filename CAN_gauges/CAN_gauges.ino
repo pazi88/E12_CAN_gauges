@@ -62,58 +62,58 @@ void setup(void)
 void CalcRPMgaugeSteps()
 {
   // RPM gauge face is not liner. Below 1000 RPM has different scale than above it.
-  if ( RPM < 1000 )
+  if ( RPM < 6400 ) // < 1000rpm
   {
-    RPMGauge.setPosition(map(RPM, 0, 1000, 0, 50));
+    RPMGauge.setPosition(map(RPM, 0, 6400, 0, 50));
   }
-  else
+  else // >= 1000rpm
   {
-    RPMGauge.setPosition(map(RPM, 1000, 9940, 50, STEPS));
+    RPMGauge.setPosition(map(RPM, 6400, 63616, 50, STEPS));
   }
 }
 
 void CalcVSSgaugeSteps()
 {
   // VSS gauge face is even less linear. This looks horrible, but it works.
-  if ( VSS < 40 )
+  if ( VSS < 5376 ) // < 40km/h
   {
-    VSSGauge.setPosition(map(VSS, 0, 40, 0, 76));
+    VSSGauge.setPosition(map(VSS, 2816, 5376, 0, 76));
   }
-  else if ( VSS < 60 )
+  else if ( VSS < 7936 ) // < 60km/h
   {
-    VSSGauge.setPosition(map(VSS, 40, 60, 76, 150));
+    VSSGauge.setPosition(map(VSS, 5376, 7936, 76, 150));
   }
-  else if ( VSS < 80 )
+  else if ( VSS < 10496 ) // < 80km/h
   {
-    VSSGauge.setPosition(map(VSS, 60, 80, 150, 221));
+    VSSGauge.setPosition(map(VSS, 7936, 10496, 150, 221));
   }
-  else if ( VSS < 100 )
+  else if ( VSS < 13056 ) // < 100km/h
   {
-    VSSGauge.setPosition(map(VSS, 80, 100, 221, 296));
+    VSSGauge.setPosition(map(VSS, 10496, 13056, 221, 296));
   }
-  else if ( VSS < 120 )
+  else if ( VSS < 15616 ) // < 120km/h
   {
-    VSSGauge.setPosition(map(VSS, 100, 120, 296, 370));
+    VSSGauge.setPosition(map(VSS, 13056, 15616, 296, 370));
   }
-  else if ( VSS < 140 )
+  else if ( VSS < 18176 ) // < 140km/h
   {
-    VSSGauge.setPosition(map(VSS, 120, 140, 370, 443));
+    VSSGauge.setPosition(map(VSS, 15616, 18176, 370, 443));
   }
-  else if ( VSS < 160 )
+  else if ( VSS < 20736 ) // < 160km/h
   {
-    VSSGauge.setPosition(map(VSS, 140, 160, 443, 517));
+    VSSGauge.setPosition(map(VSS, 18176, 20736, 443, 517));
   }
-  else if ( VSS < 180 )
+  else if ( VSS < 23296 ) // < 180km/h
   {
-    VSSGauge.setPosition(map(VSS, 160, 180, 517, 592));
+    VSSGauge.setPosition(map(VSS, 20736, 23296, 517, 592));
   }
-  else if ( VSS < 200 )
+  else if ( VSS < 25856 ) // < 200km/h
   {
-    VSSGauge.setPosition(map(VSS, 180, 200, 592, 670));
+    VSSGauge.setPosition(map(VSS, 23296, 25856, 592, 670));
   }
-  else
+  else // >= 200km/h
   {
-    VSSGauge.setPosition(map(VSS, 200, 273, 670, STEPS));
+    VSSGauge.setPosition(map(VSS, 25856 35200, 670, STEPS));
   }
 }
 
@@ -124,37 +124,51 @@ void readCanMessage()
     case 0x316: // RPM in e39/e46 etc.
       RPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[2]));
       CalcRPMgaugeSteps();
+      //debug:
+      uint32_t tempRPM;
+      tempRPM = RPM;
+      // convert the e39/e46 RPM data to real RPM reading
+      tempRPM = (tempRPM * 10) / 64;
       Serial.print ("E39/46 RPM: ");
-      Serial.println (RPM);
+      Serial.println (tempRPM);
       RPM_timeout = millis();             // zero the timeout
     break;
     case  0x153: // VSS in e39/e46 etc.
       VSS = ((CAN_inMsg.buf[2] << 8) | (CAN_inMsg.buf[1]));
-      VSS = VSS - 252;
-      VSS = VSS >> 7; // divide by 128
       CalcVSSgaugeSteps();
+      //debug:
+      uint32_t tempVSS;
+      tempVSS = VSS;
+      // convert the e39/e46 VSS data to real VSS reading
+      tempVSS = tempVSS >> 7; // divide by 128
+      tempVSS = tempVSS - 2;
       Serial.print ("E39/46 VSS: ");
-      Serial.println (VSS);
+      Serial.println (tempVSS);
       VSS_timeout = millis();             // zero the timeout
     break;
     case  0x7E8: // OBD2 PID response.
       switch (CAN_inMsg.buf[2])
         {
           case 0x0C: // RPM
-            RPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[4]));
-            RPM = RPM >> 2;
+            uint32_t tempRPM;
+            tempRPM = ((CAN_inMsg.buf[3] << 8) | (CAN_inMsg.buf[4]));
+            RPM = (tempRPM * 16) / 10;
             RPM_Request = true;
             CalcRPMgaugeSteps();
+            //debug:
             Serial.print ("OBD2 RPM: ");
-            Serial.println (RPM);
+            Serial.println (RPM = RPM >> 2);
             RPM_timeout = millis();             // zero the timeout
             break;
           case 0x0D: // VSS
-            VSS = CAN_inMsg.buf[3];
+            VSS = (CAN_inMsg.buf[3] * 10);
             VSS_Request = true;
-            CalcVSSgaugeSteps();
+            //debug:
             Serial.print ("OBD2 VSS: ");
             Serial.println (VSS);
+            VSS = VSS + 2
+            VSS = VSS << 7; // multiply by 128
+            CalcVSSgaugeSteps();
             VSS_timeout = millis();             // zero the timeout
           break;
           default:
