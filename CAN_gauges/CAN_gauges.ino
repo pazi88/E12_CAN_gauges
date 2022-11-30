@@ -11,6 +11,8 @@
 
 //standard X25.168 range 315 degrees at 1/3 degree steps
 #define STEPS (315*3)
+//this defines how much filtering is applied to the values to avoid needle jumping around. 0 = no filtering, 255 = max filtering.
+#define filter_amount 1
 
 static CAN_message_t CAN_outMsg;
 static CAN_message_t CAN_inMsg;
@@ -27,7 +29,28 @@ SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
 
 bool RPM_Request=true;
 bool VSS_Request=true;
-uint16_t VSS,RPM;
+uint16_t VSS,RPM,RPMsteps,VSSsteps;
+
+#if ((STM32_CORE_VERSION_MINOR<=8) & (STM32_CORE_VERSION_MAJOR==1))
+void requestData(HardwareTimer*){void requestData();}
+#endif
+
+void requestData()
+{
+  if(RPM_Request) {
+    CAN_outMsg.buf[2]= 0x0C; // PID number for RPM
+    Can1.write(CAN_outMsg);
+    RPM_Request = false;
+    Serial.println ("RPM request");
+  }
+  
+  if(VSS_Request) {
+    CAN_outMsg.buf[2]= 0x0D; // PID number for VSS
+    Can1.write(CAN_outMsg);
+    VSS_Request = false;
+    Serial.println ("VSS request");
+  }
+}
 
 void setup(void)
 {
@@ -54,67 +77,108 @@ void setup(void)
   
   VSS = 0;
   RPM = 0;
+  RPMsteps = 0;
+  VSSsteps = 0;
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
+
+  // setup hardwaretimer to request obd data in 50Hz pace. Otherwise the obd2 requests can be too fast.
+#if defined(TIM1)
+  TIM_TypeDef *Instance = TIM1;
+#else
+  TIM_TypeDef *Instance = TIM2;
+#endif
+  HardwareTimer *requestTimer = new HardwareTimer(Instance);
+  requestTimer->setOverflow(50, HERTZ_FORMAT); // 50 Hz
+#if ( STM32_CORE_VERSION_MAJOR < 2 )
+  requestTimer->attachInterrupt(1, requestData);
+  requestTimer->setMode(1, TIMER_OUTPUT_COMPARE);
+#else //2.0 forward
+  requestTimer->attachInterrupt(requestData);
+#endif
+  requestTimer->resume();
+
   Serial.println("Setup done");
 }
 
+#define FILTER(input, alpha, prior) (((long)input * (256 - alpha) + ((long)prior * alpha))) >> 8
+
 void CalcRPMgaugeSteps()
 {
-  // RPM gauge face is not liner. Below 1000 RPM has different scale than above it.
+  uint16_t tempRPMsteps = 0;
+  // RPM gauge face is not linear. Below 1000 RPM has different scale than above it.
   if ( RPM < 6400 ) // < 1000rpm
   {
-    RPMGauge.setPosition(map(RPM, 0, 6400, 0, 50));
+    tempRPMsteps = map(RPM, 0, 6400, 0, 50);
   }
-  else // >= 1000rpm
+  else if ( RPM < 63616 ) // >= 1000rpm
   {
-    RPMGauge.setPosition(map(RPM, 6400, 63616, 50, STEPS));
+    tempRPMsteps = map(RPM, 6400, 63616, 50, STEPS);
   }
+  else if ( RPM >= 63616 )// limit to max steps
+  {
+    tempRPMsteps = STEPS;
+  }
+
+  RPMsteps = FILTER(tempRPMsteps, filter_amount, RPMsteps);
+  RPMGauge.setPosition(RPMsteps);
 }
 
 void CalcVSSgaugeSteps()
 {
+  uint16_t tempVSSsteps = 0;
   // VSS gauge face is even less linear. This looks horrible, but it works.
-  if ( VSS < 5376 ) // < 40km/h
+  if ( VSS < 2816 ) // < 20km/h, Minimum is 20km/h. Less than that we set gauge at zero steps.
   {
-    VSSGauge.setPosition(map(VSS, 2816, 5376, 0, 76));
+    tempVSSsteps = 0;
+  } 
+  else if ( VSS < 5376 ) // < 40km/h
+  {
+    tempVSSsteps = map(VSS, 2816, 5376, 0, 76);
   }
   else if ( VSS < 7936 ) // < 60km/h
   {
-    VSSGauge.setPosition(map(VSS, 5376, 7936, 76, 150));
+    tempVSSsteps = map(VSS, 5376, 7936, 76, 150);
   }
   else if ( VSS < 10496 ) // < 80km/h
   {
-    VSSGauge.setPosition(map(VSS, 7936, 10496, 150, 221));
+    tempVSSsteps = map(VSS, 7936, 10496, 150, 221);
   }
   else if ( VSS < 13056 ) // < 100km/h
   {
-    VSSGauge.setPosition(map(VSS, 10496, 13056, 221, 296));
+    tempVSSsteps = map(VSS, 10496, 13056, 221, 296);
   }
   else if ( VSS < 15616 ) // < 120km/h
   {
-    VSSGauge.setPosition(map(VSS, 13056, 15616, 296, 370));
+    tempVSSsteps = map(VSS, 13056, 15616, 296, 370);
   }
   else if ( VSS < 18176 ) // < 140km/h
   {
-    VSSGauge.setPosition(map(VSS, 15616, 18176, 370, 443));
+    tempVSSsteps = map(VSS, 15616, 18176, 370, 443);
   }
   else if ( VSS < 20736 ) // < 160km/h
   {
-    VSSGauge.setPosition(map(VSS, 18176, 20736, 443, 517));
+    tempVSSsteps = map(VSS, 18176, 20736, 443, 517);
   }
   else if ( VSS < 23296 ) // < 180km/h
   {
-    VSSGauge.setPosition(map(VSS, 20736, 23296, 517, 592));
+    tempVSSsteps = map(VSS, 20736, 23296, 517, 592);
   }
   else if ( VSS < 25856 ) // < 200km/h
   {
-    VSSGauge.setPosition(map(VSS, 23296, 25856, 592, 670));
+    tempVSSsteps = map(VSS, 23296, 25856, 592, 670);
   }
-  else // >= 200km/h
+  else if ( VSS < 35200 ) // >= 200km/h
   {
-    VSSGauge.setPosition(map(VSS, 25856 35200, 670, STEPS));
+    tempVSSsteps = map(VSS, 25856, 35200, 670, STEPS);
   }
+  else // limit to max steps
+  {
+    tempVSSsteps = STEPS;
+  }
+  
+  VSSsteps = FILTER(tempVSSsteps, filter_amount, VSSsteps);
+  VSSGauge.setPosition(VSSsteps);
 }
 
 void readCanMessage()
@@ -157,17 +221,19 @@ void readCanMessage()
             CalcRPMgaugeSteps();
             //debug:
             Serial.print ("OBD2 RPM: ");
-            Serial.println (RPM = RPM >> 2);
+            Serial.println (tempRPM >> 2);
             RPM_timeout = millis();             // zero the timeout
             break;
           case 0x0D: // VSS
-            VSS = (CAN_inMsg.buf[3] * 10);
+            VSS = (CAN_inMsg.buf[3]);
             VSS_Request = true;
             //debug:
             Serial.print ("OBD2 VSS: ");
             Serial.println (VSS);
-            VSS = VSS + 2
+            VSS = VSS + 2;
             VSS = VSS << 7; // multiply by 128
+            Serial.print ("Calculated VSS: ");
+            Serial.println (VSS);
             CalcVSSgaugeSteps();
             VSS_timeout = millis();             // zero the timeout
           break;
@@ -186,33 +252,21 @@ void loop(void)
 {
   if ( (millis()-RPM_timeout) > 500) { // timeout, because no RPM data from CAN bus
     RPM_timeout = millis();
-	RPM = 0;
-	CalcRPMgaugeSteps();
-	VSS_Request = true;
+    RPM = 0;
+    RPMGauge.setPosition(0);
+    RPM_Request = true;
     Serial.println ("RPM timeout");
   }
   if ( (millis()-VSS_timeout) > 500) { // timeout, because no VSS data from CAN bus
     VSS_timeout = millis();
-	VSS = 0;
-	VSS_Request = true;
-	CalcVSSgaugeSteps();
+    VSS = 0;
+    VSSGauge.setPosition(0);
+    VSS_Request = true;
     Serial.println ("VSS timeout");
   }
   // the gauges only moves when update is called
   VSSGauge.update();
   RPMGauge.update();
-
-  if(RPM_Request) {
-    CAN_outMsg.buf[2]= 0x0C; // PID number for RPM
-    Can1.write(CAN_outMsg);
-    RPM_Request = false;
-  }
-  
-  if(VSS_Request) {
-    CAN_outMsg.buf[2]= 0x0D; // PID number for VSS
-    Can1.write(CAN_outMsg);
-    VSS_Request = false;
-  }
 
   while (Can1.read(CAN_inMsg) ) {
     readCanMessage();
