@@ -27,7 +27,9 @@ static unsigned short defaultAccelTable[][2] = {
   {  60, 620},
   {  70, 490},
   {  80, 390},
-  {  90, 310}
+  {  90, 310},
+  { 100, 240},
+  { 110, 190}
 };
 
 const int stepPulseMicrosec = 1;
