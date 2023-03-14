@@ -6,17 +6,52 @@
 //LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 //OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //THE SOFTWARE.
-#include "STM32_CAN.h"
-#include <SwitecX25.h>
+
+// Select CAN or Serial to be used (serial is speeduino secondary serial)
+#define USECAN
+//#define USESERIAL
+
+// Select if the board has stepper driver or AX1201728SG microstepping driver
+#define STEPPER
+//#define MICROSTEPPER
+
+#ifdef USECAN
+  #include "STM32_CAN.h"
+  static CAN_message_t CAN_outMsg;
+  static CAN_message_t CAN_inMsg;
+  STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
+#endif
+
+#ifdef USESERIAL
+  #ifdef ARDUINO_BLUEPILL_F103C8
+    HardwareSerial Serial3(USART3); // for some reason this isn't defined in arduino_core_stm32
+  #endif
+#endif
+
+#ifdef STEPPER
+  #include <SwitecX25.h>
+  // standard X25.168 range 315 degrees at 1/3 degree steps
+  #define STEPS (315*3)
+  // for motors connected to digital pins
+  SwitecX25 VSSGauge(STEPS,PB6,PB7,PB9,PB8);
+  SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
+#endif
+
 #include "U8g2lib.h"
 #include <SPI.h>
+#include "src/BackupSram/BackupSramAsEEPROM.h" // this is copied from speeduino to access battery backed SRAM easily
 
-//standard X25.168 range 315 degrees at 1/3 degree steps
-#define STEPS (315*3)
-//this defines how much filtering is applied to the values to avoid needle jumping around. 0 = no filtering, 255 = max filtering.
+// this defines how much filtering is applied to the values to avoid needle jumping around. 0 = no filtering, 255 = max filtering.
 #define filter_amount 1
 #define OBD2UpdateRate 50  // 50 Hz rate to update data from OBD2
+// low pass filter (stolen from speeduino code)
 #define FILTER(input, alpha, prior) (((long)input * (256 - alpha) + ((long)prior * alpha))) >> 8
+// screen states
+#define ODOMETER        0
+#define RPMS            1
+#define OIL_TEMP        2
+#define COOLANT_TEMP    3
+#define OIL_PRESSURE    4
 
 const uint8_t u8g2_Super_Secret_Font_18_r[2345] U8G2_FONT_SECTION("u8g2_Super_Secret_Font_18_r") = 
   "`\0\4\4\5\5\3\5\6\30\31\0\373\22\373\23\373\3\34\6A\11\20 \6\0\20\236\0!\15D"
@@ -94,20 +129,13 @@ const uint8_t u8g2_Super_Secret_Font_18_r[2345] U8G2_FONT_SECTION("u8g2_Super_Se
   "\0\304\3\20\17@<\0\361\0\304\3\20\17@<\0\361\0\304\3\20\17@<\0\361\0\304\3\20\17"
   "@<\200\7\3\0\0\0";
 
-static CAN_message_t CAN_outMsg;
-static CAN_message_t CAN_inMsg;
-
 static uint32_t RPM_timeout=millis();   // for the RPM timeout
 static uint32_t VSS_timeout=millis();   // for the VSS timeout
 
-STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
+BackupSramAsEEPROM SRAM;
 
 U8G2_SH1122_256X64_1_4W_HW_SPI upper(U8G2_R2, /* cs=*/ PC15, /* dc=*/ PA15, /* reset=*/ PA8); // Screen above the needle
 U8G2_SH1122_256X64_1_4W_HW_SPI lower(U8G2_R2, /* cs=*/ PC14, /* dc=*/ PA15, /* reset=*/ U8X8_PIN_NONE); // Screen below the needle. (screens share the reset pin)
-
-// for motors connected to digital pins
-SwitecX25 VSSGauge(STEPS,PB6,PB7,PB9,PB8);
-SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
 
 // to keep track of if OBD2 requests have been sent.
 bool RPM_Request=true;
@@ -125,6 +153,8 @@ uint64_t odometerCm;
 uint32_t tripCm;
 // to keep track of 1sec duration to calculate trip and odometer.
 int8_t oneSec;
+// screen state (what to show there)
+int8_t state;
 
 #if ((STM32_CORE_VERSION_MINOR<=8) & (STM32_CORE_VERSION_MAJOR==1))
 void requestData(HardwareTimer*){void requestData();}
@@ -146,6 +176,7 @@ void calcOdometer()
   tripCm = tripCm + VSScmS; // Same for trip.
   odometer = odometerCm / 100000; // Convert centimeters to kilometers for odometer
   trip = tripCm / 10000; // Convert centimeters to 100 meters for trip.
+  SRAM.write32(0,tripCm);
 }
 
 void requestData()
@@ -180,14 +211,18 @@ void setup(void)
   odometerCm = 123456700000;
   trip = 1234;
   tripOld = 1234;
-  tripCm = 12340000;
+  tripCm = SRAM.read32(0);
   Serial.begin(115200); // for debugging
   // run the motors against the stops TBD: this needs to be done when powering off. Not at startup
   //VSSGauge.zero();
   //RPMGauge.zero();
 
   Serial.begin(115200); // debug
+#ifdef USESERIAL
+  Serial3.begin(115200);  // baudrate for Speeduino is 115200
+#endif
 
+#ifdef USECAN
   Can1.begin();
   Can1.setBaudRate(500000);
   CAN_outMsg.len = 8; // 8 bytes in can message
@@ -201,7 +236,8 @@ void setup(void)
   CAN_outMsg.buf[5]= 0x00; // set to zero just in case.
   CAN_outMsg.buf[6]= 0x00; // set to zero just in case.
   CAN_outMsg.buf[7]= 0x00; // set to zero just in case.
-  
+#endif
+ 
   VSS = 0;
   RPM = 0;
   RPMsteps = 0;
@@ -209,6 +245,7 @@ void setup(void)
   oneSec = 0;
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
+  state = ODOMETER;
 
   // setup hardwaretimer to request obd data in 50Hz pace. Otherwise the obd2 requests can be too fast. This timer is also used to calculate odometer and trip in 1sec intervals.
 #if defined(TIM1)
@@ -295,6 +332,36 @@ void updateTrip()
   tripOld = trip;
 }
 
+void updateOther()
+{
+  uint16_t tempValue;
+  switch (state)
+  {
+    case RPMS:
+      tempValue = RPM / 6.4;
+    break;
+    case OIL_TEMP:
+      //TBD
+    break;
+    case COOLANT_TEMP:
+      //TBD
+    break;
+    case OIL_PRESSURE:
+      //TBD
+    break;
+    default:
+      // nothing to do here
+    break;
+  }
+  char str[4];
+  strcpy(str, u8x8_u16toa(tempValue, 4));		/* convert m to a string with two digits */
+  lower.firstPage();
+  do {
+    lower.setFont(u8g2_Super_Secret_Font_18_r);
+    lower.drawStr(113,42,str);
+  } while ( lower.nextPage() );
+}
+
 void CalcRPMgaugeSteps()
 {
   uint16_t tempRPMsteps = 0;
@@ -373,6 +440,7 @@ void CalcVSSgaugeSteps()
   VSSGauge.setPosition(VSSsteps);
 }
 
+#ifdef USECAN
 void readCanMessage()
 {
   switch (CAN_inMsg.id)
@@ -427,6 +495,7 @@ void readCanMessage()
     break;
   }
 }
+#endif
 
 void loop(void)
 {
@@ -446,15 +515,17 @@ void loop(void)
   }
   
   // update the screens if the odometer and trip values have been increased
-  if ( odometer > odometerOld ) {
+  if ( (odometer > odometerOld) && (state == ODOMETER) ) {
     updateOdometer();
   }
-  if ( trip > tripOld ) {
+  if ( (trip > tripOld) && (state == ODOMETER) ) {
     updateTrip();
   }
 
+#ifdef USECAN
   // see if there is messages available on can bus to read.
   while (Can1.read(CAN_inMsg) ) {
     readCanMessage();
   }
+#endif
 }
