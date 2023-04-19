@@ -6,17 +6,35 @@
 //LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 //OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //THE SOFTWARE.
+
+//This code is made to work with both AX1201728SG stepper driver or TB6612FNG H-bridge driver. Comment out the one that isn't used to drive the gauge steppers
+#define STEPPERDRIVER
+//#define HBRIDGE
+
+
 #include "STM32_CAN.h"
-#include <SwitecX25.h>
 #include "U8g2lib.h"
 #include <SPI.h>
 
-//standard X25.168 range 315 degrees at 1/3 degree steps
+//standard X25.168 range 315 degrees at 1/3 degree full steps
 #define STEPS (315*3)
+
+#ifdef HBRIDGE
+  #include <src/SwitecX25.h>
+#endif
+
+#ifdef STEPPERDRIVER
+  #include <src/SwitecX12.h>
+  //With the AX1201728SG, we get microstepping, so 1/12 degree micro steps. We need this value in few places
+  #define MICROSTEPS (315*12)
+#endif
+
 //this defines how much filtering is applied to the values to avoid needle jumping around. 0 = no filtering, 255 = max filtering.
 #define filter_amount 1
-#define OBD2UpdateRate 50  // 50 Hz rate to update data from OBD2
+//low pass filter stolen from speeduino code
 #define FILTER(input, alpha, prior) (((long)input * (256 - alpha) + ((long)prior * alpha))) >> 8
+// 50 Hz rate to update data from OBD2
+#define OBD2UpdateRate 50
 
 const uint8_t u8g2_Super_Secret_Font_18_r[2345] U8G2_FONT_SECTION("u8g2_Super_Secret_Font_18_r") = 
   "`\0\4\4\5\5\3\5\6\30\31\0\373\22\373\23\373\3\34\6A\11\20 \6\0\20\236\0!\15D"
@@ -106,8 +124,15 @@ U8G2_SH1122_256X64_1_4W_HW_SPI upper(U8G2_R2, /* cs=*/ PC15, /* dc=*/ PA15, /* r
 U8G2_SH1122_256X64_1_4W_HW_SPI lower(U8G2_R2, /* cs=*/ PC14, /* dc=*/ PA15, /* reset=*/ U8X8_PIN_NONE); // Screen below the needle. (screens share the reset pin)
 
 // for motors connected to digital pins
-SwitecX25 VSSGauge(STEPS,PB6,PB7,PB9,PB8);
-SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
+#ifdef HBRIDGE
+  SwitecX25 VSSGauge(STEPS,PB6,PB7,PB9,PB8);
+  SwitecX25 RPMGauge(STEPS,PB12,PB13,PB15,PB14);
+#endif
+
+#ifdef STEPPERDRIVER
+  SwitecX12 VSSGauge(MICROSTEPS, PB8, PB9, 1);
+  SwitecX12 RPMGauge(MICROSTEPS, PB6, PB7, 1);
+#endif
 
 // to keep track of if OBD2 requests have been sent.
 bool RPM_Request=true;
@@ -125,6 +150,11 @@ uint64_t odometerCm;
 uint32_t tripCm;
 // to keep track of 1sec duration to calculate trip and odometer.
 int8_t oneSec;
+// push buttons on the instrument cluster
+const int leftButton = PC13;
+const int rightButton = PB5;
+// the instrument cluster can be kept on using this pin as output to drive home the needles.
+const int powerPin = PA0;
 
 #if ((STM32_CORE_VERSION_MINOR<=8) & (STM32_CORE_VERSION_MAJOR==1))
 void requestData(HardwareTimer*){void requestData();}
@@ -182,11 +212,6 @@ void setup(void)
   tripOld = 1234;
   tripCm = 12340000;
   Serial.begin(115200); // for debugging
-  // run the motors against the stops TBD: this needs to be done when powering off. Not at startup
-  //VSSGauge.zero();
-  //RPMGauge.zero();
-
-  Serial.begin(115200); // debug
 
   Can1.begin();
   Can1.setBaudRate(500000);
@@ -236,6 +261,12 @@ void setup(void)
   // put the odometer and trip values from memory to the screens.
   updateOdometer();
   updateTrip();
+  // set the basic inputs/outputs
+  pinMode(leftButton, INPUT);
+  pinMode(rightButton, INPUT);
+  pinMode(powerPin, OUTPUT);
+  // the power pin is set to high to keep the instrument cluster powered on when ignition is turned off. This code will shut down the cluster once needles are at zero.
+  digitalWrite(powerPin, HIGH);
   Serial.println("Setup done");
 }
 
@@ -255,7 +286,7 @@ void updateOdometer()
     bool first_digit = false;
     for (int i=0; i<7; i++)
     {
-      if ( (odometer_array[i] > 0) || first_digit ) // do not draw the leading zeros
+      if ( (odometer_array[i] > 0) || first_digit || (i == 6) ) // do not draw the leading zeros
       {
         first_digit = true;
         upper.setCursor((65+((i-1)*20)), 38);
@@ -283,7 +314,7 @@ void updateTrip()
     bool first_digit = false;
     for (int i=0; i<4; i++)
     {
-      if ( (trip_array[i] > 0) || first_digit ) // do not draw the leading zeros
+      if ( (trip_array[i] > 0) || first_digit || (i == 3) ) // do not draw the leading zeros
       {
         first_digit = true;
         lower.setCursor((113+((i-1)*20)), 42);
@@ -313,7 +344,12 @@ void CalcRPMgaugeSteps()
   }
   // low pass filter the step value to prevent the needle from jumping.
   RPMsteps = FILTER(tempRPMsteps, filter_amount, RPMsteps);
+#ifdef HBRIDGE
   RPMGauge.setPosition(RPMsteps);
+#endif
+#ifdef STEPPERDRIVER
+  RPMGauge.setPosition(RPMsteps*4);
+#endif
 }
 
 void CalcVSSgaugeSteps()
@@ -370,7 +406,12 @@ void CalcVSSgaugeSteps()
   }
   // low pass filter the step value to prevent the needle from jumping.
   VSSsteps = FILTER(tempVSSsteps, filter_amount, VSSsteps);
+#ifdef HBRIDGE
   VSSGauge.setPosition(VSSsteps);
+#endif
+#ifdef STEPPERDRIVER
+  VSSGauge.setPosition(VSSsteps*4);
+#endif
 }
 
 void readCanMessage()
@@ -428,14 +469,37 @@ void readCanMessage()
   }
 }
 
+void clusterShutdown()
+{
+  // Set the needles back to zero
+  RPMGauge.setPosition(0);
+  VSSGauge.setPosition(0);
+  // wait until zero
+  while ( (RPMGauge.currentStep != 0) && (RPMGauge.currentStep != 0) ) {
+    //Serial.println(RPMGauge.currentStep);
+  }
+  // turn off the cluster
+  digitalWrite(powerPin, LOW);
+  Serial.println("Shutdown completed");
+}
+
 void loop(void)
 {
+  // check if the pushbuttons are pressed.
+  if (digitalRead(leftButton) == LOW) {
+    // zero out the trip
+    trip = 0;
+	tripCm = 0;
+  }
   if ( (millis()-RPM_timeout) > 500) { // timeout, because no RPM data from CAN bus
     RPM_timeout = millis();
     RPM = 0;
     RPMGauge.setPosition(0);
     RPM_Request = true;
     Serial.println ("RPM timeout");
+	// no RPM data, so we assume that the car has shut down. So proceed to shut down the cluster too.
+	Serial.println ("Shutdown started");
+	clusterShutdown();
   }
   if ( (millis()-VSS_timeout) > 500) { // timeout, because no VSS data from CAN bus
     VSS_timeout = millis();
@@ -445,11 +509,11 @@ void loop(void)
     Serial.println ("VSS timeout");
   }
   
-  // update the screens if the odometer and trip values have been increased
+  // update the screens if the odometer and trip values have changed
   if ( odometer > odometerOld ) {
     updateOdometer();
   }
-  if ( trip > tripOld ) {
+  if ( trip != tripOld ) {
     updateTrip();
   }
 
