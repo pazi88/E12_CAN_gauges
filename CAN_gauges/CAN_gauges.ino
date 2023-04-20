@@ -11,10 +11,13 @@
 #define STEPPERDRIVER
 //#define HBRIDGE
 
+#include "STM32_CAN.h" //My own STM32 CAN library
+#include "U8g2lib.h" //Standard U8G2 library for the two OLEDs
+#include <SPI.h> //SPI is used to talk to the screens and the Flash chip
+#include <FlashStorage_STM32F1.h> //Library to use the program memory flash as EEPROM. The SPI Flash was meant to be used for that, but for now I haven't gotten it to work with the screens.
 
-#include "STM32_CAN.h"
-#include "U8g2lib.h"
-#include <SPI.h>
+#define FLASH_DEBUG       0
+#define USING_FLASH_SECTOR_NUMBER           (REGISTERED_NUMBER_FLASH_SECTORS - 2)
 
 //standard X25.168 range 315 degrees at 1/3 degree full steps
 #define STEPS (315*3)
@@ -33,9 +36,9 @@
 #define filter_amount 1
 //low pass filter stolen from speeduino code
 #define FILTER(input, alpha, prior) (((long)input * (256 - alpha) + ((long)prior * alpha))) >> 8
-// 50 Hz rate to update data from OBD2
+// 50 Hz rate to update data from OBD2. This can be adjusted to suit the needs.
 #define OBD2UpdateRate 50
-
+// Custom font for the screens
 const uint8_t u8g2_Super_Secret_Font_18_r[2345] U8G2_FONT_SECTION("u8g2_Super_Secret_Font_18_r") = 
   "`\0\4\4\5\5\3\5\6\30\31\0\373\22\373\23\373\3\34\6A\11\20 \6\0\20\236\0!\15D"
   "\32\236\360\0\305<\221\352A\0\42\12\7Y\257\60\244~\42\0#'M\26\276$F\230\30abD"
@@ -117,7 +120,7 @@ static CAN_message_t CAN_inMsg;
 
 static uint32_t RPM_timeout=millis();   // for the RPM timeout
 static uint32_t VSS_timeout=millis();   // for the VSS timeout
-
+//CAN rx buffer size increased, because it might be needed in busy CAN bus.
 STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
 
 U8G2_SH1122_256X64_1_4W_HW_SPI upper(U8G2_R2, /* cs=*/ PC15, /* dc=*/ PA15, /* reset=*/ PA8); // Screen above the needle
@@ -150,6 +153,8 @@ uint64_t odometerCm;
 uint32_t tripCm;
 // to keep track of 1sec duration to calculate trip and odometer.
 int8_t oneSec;
+// for now program memory flash is used to store odometer/trip. It has wear limit, so we try to avoid writing to it as much as possible. So this makes the flash to be written only once on every power up.
+bool notCommitted;
 // push buttons on the instrument cluster
 const int leftButton = PC13;
 const int rightButton = PB5;
@@ -163,7 +168,7 @@ void updateSteppers(HardwareTimer*){void updateSteppers();}
 
 void updateSteppers()
 {
-  // the gauges only moves when update is called. So we call the update at every loop.
+  // the gauges only moves when update is called. So we call the update on this fuction for every 100uS.
   VSSGauge.update();
   RPMGauge.update();
 }
@@ -176,6 +181,8 @@ void calcOdometer()
   tripCm = tripCm + VSScmS; // Same for trip.
   odometer = odometerCm / 100000; // Convert centimeters to kilometers for odometer
   trip = tripCm / 10000; // Convert centimeters to 100 meters for trip.
+  EEPROM.put(0, odometerCm);
+  EEPROM.put(8, tripCm);
 }
 
 void requestData()
@@ -204,15 +211,16 @@ void setup(void)
   // initialize screens
   upper.begin();
   lower.begin();
-  // debug
-  odometer = 1234567;
-  odometerOld = 1234567;
-  odometerCm = 123456700000;
-  trip = 1234;
-  tripOld = 1234;
-  tripCm = 12340000;
+  // "EEPROM" for odometer/trip
+  EEPROM.init();
+  EEPROM.get(0, odometerCm);
+  odometer = odometerCm / 100000;
+  odometerOld = odometer;
+  EEPROM.get(8, tripCm);
+  trip = tripCm / 10000;
+  tripOld = trip;
   Serial.begin(115200); // for debugging
-
+// Init CAN
   Can1.begin();
   Can1.setBaudRate(500000);
   CAN_outMsg.len = 8; // 8 bytes in can message
@@ -232,6 +240,7 @@ void setup(void)
   RPMsteps = 0;
   VSSsteps = 0;
   oneSec = 0;
+  notCommitted = true;
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
 
@@ -474,6 +483,11 @@ void clusterShutdown()
   // Set the needles back to zero
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
+  if (notCommitted) {
+    EEPROM.commit();
+	notCommitted = false;
+	Serial.println("Odometer/trip saved to eeprom");
+  }
   // wait until zero
   while ( (RPMGauge.currentStep != 0) && (RPMGauge.currentStep != 0) ) {
     //Serial.println(RPMGauge.currentStep);
@@ -509,7 +523,7 @@ void loop(void)
     Serial.println ("VSS timeout");
   }
   
-  // update the screens if the odometer and trip values have changed
+  // update the screens if the odometer and trip values have changed, because those are dead slow to update
   if ( odometer > odometerOld ) {
     updateOdometer();
   }
