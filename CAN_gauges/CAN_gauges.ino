@@ -220,9 +220,13 @@ void setup(void)
   trip = tripCm / 10000;
   tripOld = trip;
   Serial.begin(115200); // for debugging
-// Init CAN
+  // Init CAN
   Can1.begin();
   Can1.setBaudRate(500000);
+  // Filter out unwanted CAN messages.
+  Can1.setMBFilterProcessing( MB0, 0x316, 0x1FFFFFFF );
+  Can1.setMBFilterProcessing( MB1, 0x153, 0x1FFFFFFF );
+  Can1.setMBFilterProcessing( MB2, 0x7E8, 0x1FFFFFFF );
   CAN_outMsg.len = 8; // 8 bytes in can message
   CAN_inMsg.len = 8;
   CAN_outMsg.id = 0x7df; // OBD-II PID_REQUEST
