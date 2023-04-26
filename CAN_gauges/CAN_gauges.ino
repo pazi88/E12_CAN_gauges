@@ -14,10 +14,6 @@
 #include "STM32_CAN.h" //My own STM32 CAN library
 #include "U8g2lib.h" //Standard U8G2 library for the two OLEDs
 #include <SPI.h> //SPI is used to talk to the screens and the Flash chip
-#include <FlashStorage_STM32F1.h> //Library to use the program memory flash as EEPROM. The SPI Flash was meant to be used for that, but for now I haven't gotten it to work with the screens.
-
-#define FLASH_DEBUG       0
-#define USING_FLASH_SECTOR_NUMBER           (REGISTERED_NUMBER_FLASH_SECTORS - 2)
 
 //standard X25.168 range 315 degrees at 1/3 degree full steps
 #define STEPS (315*3)
@@ -33,7 +29,7 @@
 #endif
 
 //this defines how much filtering is applied to the values to avoid needle jumping around. 0 = no filtering, 255 = max filtering.
-#define filter_amount 1
+#define filter_amount 5
 //low pass filter stolen from speeduino code
 #define FILTER(input, alpha, prior) (((long)input * (256 - alpha) + ((long)prior * alpha))) >> 8
 // 50 Hz rate to update data from OBD2. This can be adjusted to suit the needs.
@@ -123,6 +119,9 @@ static uint32_t VSS_timeout=millis();   // for the VSS timeout
 //CAN rx buffer size increased, because it might be needed in busy CAN bus.
 STM32_CAN Can1( CAN1, DEF, RX_SIZE_64, TX_SIZE_16 );
 
+#define FLASH_BASEADRESS     0x801D400UL
+#define FLASH_ODOADRESS      0x801D404UL
+
 U8G2_SH1122_256X64_1_4W_HW_SPI upper(U8G2_R2, /* cs=*/ PC15, /* dc=*/ PA15, /* reset=*/ PA8); // Screen above the needle
 U8G2_SH1122_256X64_1_4W_HW_SPI lower(U8G2_R2, /* cs=*/ PC14, /* dc=*/ PA15, /* reset=*/ U8X8_PIN_NONE); // Screen below the needle. (screens share the reset pin)
 
@@ -148,9 +147,11 @@ uint32_t odometerOld;
 // trip value shown on screen. 100m resolution
 uint16_t trip;
 uint16_t tripOld;
-// more accurate trip and odometer. 1cm resolution. (TBD, store in eeprom)
+// more accurate trip and odometer. 1cm resolution.
 uint64_t odometerCm;
+uint64_t odometerCmStart;
 uint32_t tripCm;
+uint32_t tripCmStart;
 // to keep track of 1sec duration to calculate trip and odometer.
 int8_t oneSec;
 // for now program memory flash is used to store odometer/trip. It has wear limit, so we try to avoid writing to it as much as possible. So this makes the flash to be written only once on every power up.
@@ -181,8 +182,6 @@ void calcOdometer()
   tripCm = tripCm + VSScmS; // Same for trip.
   odometer = odometerCm / 100000; // Convert centimeters to kilometers for odometer
   trip = tripCm / 10000; // Convert centimeters to 100 meters for trip.
-  EEPROM.put(0, odometerCm);
-  EEPROM.put(8, tripCm);
 }
 
 void requestData()
@@ -206,17 +205,27 @@ void requestData()
   }
 }
 
+void read_trip( uint32_t *data ) {
+  uint32_t* base_addr = (uint32_t *) FLASH_BASEADRESS; 
+  *(data) = *(base_addr);
+}
+
+void read_odometer( uint64_t *data ) {
+  uint64_t* base_addr = (uint64_t *) FLASH_ODOADRESS;
+  *(data) = *(base_addr);
+}
+
 void setup(void)
 {
   // initialize screens
   upper.begin();
   lower.begin();
-  // "EEPROM" for odometer/trip
-  EEPROM.init();
-  EEPROM.get(0, odometerCm);
+  read_odometer(&odometerCm);
+  odometerCmStart = odometerCm;
   odometer = odometerCm / 100000;
   odometerOld = odometer;
-  EEPROM.get(8, tripCm);
+  read_trip(&tripCm);
+  tripCmStart = tripCm;
   trip = tripCm / 10000;
   tripOld = trip;
   Serial.begin(115200); // for debugging
@@ -355,14 +364,12 @@ void CalcRPMgaugeSteps()
   {
     tempRPMsteps = STEPS;
   }
+#ifdef STEPPERDRIVER
+  tempRPMsteps = tempRPMsteps * 4;
+#endif
   // low pass filter the step value to prevent the needle from jumping.
   RPMsteps = FILTER(tempRPMsteps, filter_amount, RPMsteps);
-#ifdef HBRIDGE
   RPMGauge.setPosition(RPMsteps);
-#endif
-#ifdef STEPPERDRIVER
-  RPMGauge.setPosition(RPMsteps*4);
-#endif
 }
 
 void CalcVSSgaugeSteps()
@@ -417,14 +424,12 @@ void CalcVSSgaugeSteps()
   {
     tempVSSsteps = STEPS;
   }
+#ifdef STEPPERDRIVER
+   VSSsteps =  VSSsteps * 4;
+#endif
   // low pass filter the step value to prevent the needle from jumping.
   VSSsteps = FILTER(tempVSSsteps, filter_amount, VSSsteps);
-#ifdef HBRIDGE
   VSSGauge.setPosition(VSSsteps);
-#endif
-#ifdef STEPPERDRIVER
-  VSSGauge.setPosition(VSSsteps*4);
-#endif
 }
 
 void readCanMessage()
@@ -488,9 +493,10 @@ void clusterShutdown()
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
   if (notCommitted) {
-    EEPROM.commit();
 	notCommitted = false;
-	Serial.println("Odometer/trip saved to eeprom");
+    if ( (tripCm != tripCmStart) || (odometerCm != odometerCmStart) ) {
+	  writeDataToFlash();
+    }
   }
   // wait until zero
   while ( (RPMGauge.currentStep != 0) && (RPMGauge.currentStep != 0) ) {
@@ -501,6 +507,28 @@ void clusterShutdown()
   Serial.println("Shutdown completed");
 }
 
+void writeDataToFlash()
+{
+  FLASH_EraseInitTypeDef EraseInitStruct;
+  uint32_t pageError = 0;
+  
+  /* ERASING page */
+  EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES;
+  EraseInitStruct.Banks = 1;
+  EraseInitStruct.PageAddress = FLASH_BASEADRESS;
+  EraseInitStruct.NbPages = 1;
+
+  //Clear any flash errors before try writing to flash to prevent write failures.
+  if(__HAL_FLASH_GET_FLAG(FLASH_FLAG_WRPERR) != RESET) __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_WRPERR);
+  if(__HAL_FLASH_GET_FLAG(FLASH_FLAG_PGERR) != RESET) __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGERR);
+
+  HAL_FLASH_Unlock();
+  if (HAL_FLASHEx_Erase(&EraseInitStruct, &pageError) == HAL_OK){Serial.println("Flash page erased");}
+  if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, FLASH_BASEADRESS, tripCm) == HAL_OK) {Serial.println("Trip written");}
+  if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, FLASH_ODOADRESS, odometerCm) == HAL_OK) {Serial.println("Odometer written");}
+  HAL_FLASH_Lock();
+}
+
 void loop(void)
 {
   // check if the pushbuttons are pressed.
@@ -509,6 +537,7 @@ void loop(void)
     trip = 0;
 	tripCm = 0;
   }
+
   if ( (millis()-RPM_timeout) > 500) { // timeout, because no RPM data from CAN bus
     RPM_timeout = millis();
     RPM = 0;
