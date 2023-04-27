@@ -134,13 +134,15 @@ U8G2_SH1122_256X64_1_4W_HW_SPI lower(U8G2_R2, /* cs=*/ PC14, /* dc=*/ PA15, /* r
 #ifdef STEPPERDRIVER
   SwitecX12 VSSGauge(MICROSTEPS, PB8, PB9, 1);
   SwitecX12 RPMGauge(MICROSTEPS, PB6, PB7, 1);
+  SwitecX12 CLTGauge(MICROSTEPS, PB14, PB15, 0);
+  SwitecX12 FUELGauge(MICROSTEPS, PB13, PB12, 0);
 #endif
 
 // to keep track of if OBD2 requests have been sent.
 bool RPM_Request=true;
 bool VSS_Request=true;
 
-uint16_t VSS,RPM,RPMsteps,VSSsteps;
+uint16_t VSS,RPM,RPMsteps,VSSsteps,CLTsteps,FUELsteps;
 // odometer value shown on screen. 1km resolution
 uint32_t odometer;
 uint32_t odometerOld;
@@ -154,6 +156,10 @@ uint32_t tripCm;
 uint32_t tripCmStart;
 // to keep track of 1sec duration to calculate trip and odometer.
 int8_t oneSec;
+// Extra values to keep track of.
+uint8_t CLT;
+uint8_t FUEL;
+uint8_t TPS;
 // for now program memory flash is used to store odometer/trip. It has wear limit, so we try to avoid writing to it as much as possible. So this makes the flash to be written only once on every power up.
 bool notCommitted;
 // push buttons on the instrument cluster
@@ -161,6 +167,10 @@ const int leftButton = PC13;
 const int rightButton = PB5;
 // the instrument cluster can be kept on using this pin as output to drive home the needles.
 const int powerPin = PA0;
+// instrument cluster lights.
+const int oilPressLight = PB1;
+const int fuelReserveLight = PB0;
+const int brakeLight = PA1;
 
 #if ((STM32_CORE_VERSION_MINOR<=8) & (STM32_CORE_VERSION_MAJOR==1))
 void requestData(HardwareTimer*){void requestData();}
@@ -172,6 +182,10 @@ void updateSteppers()
   // the gauges only moves when update is called. So we call the update on this fuction for every 100uS.
   VSSGauge.update();
   RPMGauge.update();
+  #ifdef STEPPERDRIVER
+  CLTGauge.update();
+  FUELGauge.update();
+  #endif
 }
 
 // called in 1 second intervals to calculate driven distance.
@@ -234,8 +248,9 @@ void setup(void)
   Can1.setBaudRate(500000);
   // Filter out unwanted CAN messages.
   Can1.setMBFilterProcessing( MB0, 0x316, 0x1FFFFFFF );
-  Can1.setMBFilterProcessing( MB1, 0x153, 0x1FFFFFFF );
-  Can1.setMBFilterProcessing( MB2, 0x7E8, 0x1FFFFFFF );
+  Can1.setMBFilterProcessing( MB1, 0x329, 0x1FFFFFFF );
+  Can1.setMBFilterProcessing( MB2, 0x153, 0x1FFFFFFF );
+  Can1.setMBFilterProcessing( MB3, 0x7E8, 0x1FFFFFFF );
   CAN_outMsg.len = 8; // 8 bytes in can message
   CAN_inMsg.len = 8;
   CAN_outMsg.id = 0x7df; // OBD-II PID_REQUEST
@@ -253,6 +268,8 @@ void setup(void)
   RPMsteps = 0;
   VSSsteps = 0;
   oneSec = 0;
+  CLT = 0;
+  TPS = 0;
   notCommitted = true;
   RPMGauge.setPosition(0);
   VSSGauge.setPosition(0);
@@ -287,8 +304,15 @@ void setup(void)
   pinMode(leftButton, INPUT);
   pinMode(rightButton, INPUT);
   pinMode(powerPin, OUTPUT);
+  pinMode(oilPressLight, OUTPUT);
+  pinMode(fuelReserveLight, OUTPUT);
+  pinMode(brakeLight, OUTPUT);
   // the power pin is set to high to keep the instrument cluster powered on when ignition is turned off. This code will shut down the cluster once needles are at zero.
   digitalWrite(powerPin, HIGH);
+  // Set all the lights off by default
+  digitalWrite(oilPressLight, HIGH);
+  digitalWrite(fuelReserveLight, HIGH);
+  digitalWrite(brakeLight, HIGH);
   Serial.println("Setup done");
 }
 
@@ -432,6 +456,25 @@ void CalcVSSgaugeSteps()
   VSSGauge.setPosition(VSSsteps);
 }
 
+#ifdef STEPPERDRIVER
+void CalcCLTgaugeSteps()
+{
+  uint16_t tempCLTsteps = 0;
+  tempCLTsteps = map(CLT, 60, 120, 0, MICROSTEPS);
+  // low pass filter the step value to prevent the needle from jumping.
+  CLTsteps = FILTER(tempCLTsteps, filter_amount, CLTsteps);
+  VSSGauge.setPosition(CLTsteps);
+}
+
+void CalcFuelgaugeSteps()
+{
+  uint16_t tempFuelSteps = 0;
+  tempFuelSteps = map(FUEL, 0, 255, 0, MICROSTEPS);
+  // low pass filter the step value to prevent the needle from jumping.
+  FUELsteps = FILTER(tempFuelSteps, filter_amount, FUELsteps);
+  FUELGauge.setPosition(FUELsteps);
+}
+#endif
 void readCanMessage()
 {
   switch (CAN_inMsg.id)
@@ -445,6 +488,10 @@ void readCanMessage()
       // convert the e39/e46 RPM data to real RPM reading
       tempRPM = (tempRPM * 10) / 64;
       RPM_timeout = millis();             // zero the timeout
+    break;
+    case 0x329: // CLT in e39/e46 etc.
+      CLT = (CAN_inMsg.buf[1]);
+      //CalcCLTgaugeSteps();
     break;
     case  0x153: // VSS in e39/e46 etc.
       VSS = ((CAN_inMsg.buf[2] << 8) | (CAN_inMsg.buf[1]));
