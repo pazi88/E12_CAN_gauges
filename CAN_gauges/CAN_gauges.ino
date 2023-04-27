@@ -425,7 +425,7 @@ void CalcVSSgaugeSteps()
     tempVSSsteps = STEPS;
   }
 #ifdef STEPPERDRIVER
-   VSSsteps =  VSSsteps * 4;
+   tempVSSsteps =  tempVSSsteps * 4;
 #endif
   // low pass filter the step value to prevent the needle from jumping.
   VSSsteps = FILTER(tempVSSsteps, filter_amount, VSSsteps);
