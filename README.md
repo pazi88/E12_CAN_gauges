@@ -6,6 +6,8 @@ cluster with x27 steppers and OLED screens to make the cluster to work with mode
 Even though this project is meant only for E12 BMW, the code and basic circuit design can be used for other cars too.
 
 X27.589 steppers are used to move the needles and two black and white SH1122 OLED screens are used to display odometer and trip.
+The board and code can use dedicated AX1201728SG stepper driver to drive the stepper motors or TB6612FNG H-bridge driver. Both
+work well, but the AX1201728SG stepper driver has micro stepping, so it will provide smoother needle movement. And allows up to 4 gauges.
 MCU controlling the cluster is STM32F103C8T6 "blue pill" because of the cheap price, good availability and integrated CAN-interface.
 For CAN-interface I'm using STM32 CAN library written by me: https://github.com/pazi88/STM32_CAN
 
