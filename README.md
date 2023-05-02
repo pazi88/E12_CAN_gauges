@@ -11,9 +11,9 @@ For CAN-interface I'm using STM32 CAN library written by me: https://github.com/
 
 CAN-bus currently supports reading data in BMW e46/e39 CAN-bus format (can11h) and also in OBD2 format.
 
-The OLED screen used: https://s.click.aliexpress.com/e/_DnFnmSD
-The steppers screen used: https://s.click.aliexpress.com/e/_DCNMbOH
-STM32F103C8T6: https://s.click.aliexpress.com/e/_DE6f1d3
+- The OLED screen used: https://s.click.aliexpress.com/e/_DnFnmSD
+- The steppers screen used: https://s.click.aliexpress.com/e/_DCNMbOH
+- STM32F103C8T6: https://s.click.aliexpress.com/e/_DE6f1d3
 
 
 ## EasyEda
