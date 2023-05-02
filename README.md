@@ -17,5 +17,5 @@ CAN-bus currently supports reading data in BMW e46/e39 CAN-bus format (can11h) a
 
 
 ## EasyEda
-EasyEda/OSHWLab project link for cluster back board: https://oshwlab.com/pazi88/e12_mittaristo
-EasyEda/OSHWLab project link for needle back board: https://oshwlab.com/pazi88/e12_mittaristo_copy
+- EasyEda/OSHWLab project link for cluster back board: https://oshwlab.com/pazi88/e12_mittaristo
+- EasyEda/OSHWLab project link for needle back board: https://oshwlab.com/pazi88/e12_mittaristo_copy
