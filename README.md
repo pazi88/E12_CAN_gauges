@@ -1,5 +1,5 @@
 # CAN-bus gauge cluster for BMW E12
-![alt text](https://github.com/pazi88/E12_CAN_gauges/tree/main/Pics/20230214_115921.jpg?raw=true)
+![alt text](https://github.com/pazi88/E12_CAN_gauges/blob/main/Pics/20230214_115921.jpg?raw=true)
 
 This is repository for CAN-bus instrument cluster for BMW E12. This is meant to replace the stock 70's mechanics/electronics inside the
 cluster with x27 steppers and OLED screens to make the cluster to work with modern ECUs through CAN-bus, but retain original look.
