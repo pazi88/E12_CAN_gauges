@@ -141,6 +141,7 @@ U8G2_SH1122_256X64_1_4W_HW_SPI lower(U8G2_R2, /* cs=*/ PC14, /* dc=*/ PA15, /* r
 // to keep track of if OBD2 requests have been sent.
 bool RPM_Request=true;
 bool VSS_Request=true;
+bool CLT_Request=true;
 
 uint16_t VSS,RPM,RPMsteps,VSSsteps,CLTsteps,FUELsteps;
 // odometer value shown on screen. 1km resolution
@@ -210,6 +211,12 @@ void requestData()
     CAN_outMsg.buf[2]= 0x0D; // PID number for VSS
     Can1.write(CAN_outMsg);
     VSS_Request = false;
+  }
+  
+  if(CLT_Request) {
+    CAN_outMsg.buf[2]= 0x05; // PID number for CLT
+    Can1.write(CAN_outMsg);
+    CLT_Request = false;
   }
   oneSec++;
   // check if one second has passed
@@ -523,6 +530,13 @@ void readCanMessage()
             CalcVSSgaugeSteps();
             VSS_timeout = millis();             // zero the timeout
           break;
+          case 0x05: // CLT
+            uint8_t tempCLT;
+            tempCLT = (CAN_inMsg.buf[3]);
+            CLT = tempCLT; // TBD needs conversion
+            CLT_Request = true;
+            CalcCLTgaugeSteps();
+            break;
           default:
           // nothing to do here
           break;
